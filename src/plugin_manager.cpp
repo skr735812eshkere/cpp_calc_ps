@@ -1,126 +1,164 @@
 #include "plugin_manager.hpp"
 #include "plugin_interface.h"
-#include <filesystem>
 #include <iostream>
-#include <vector>
-#include <memory>
+#include <filesystem>
+#include <stdexcept>
 
-#ifdef _WIN32
-  #include <windows.h>
+#if defined(_WIN32)
+    #include <windows.h>
 #else
-  #include <dlfcn.h>
+    #include <dlfcn.h>
 #endif
 
-struct PluginManager::Impl {
-    std::vector<void*> handles;
-};
+namespace fs = std::filesystem;
 
-PluginManager::PluginManager(FunctionRegistry& r) : registry(r) {
-    impl = new Impl();
+DynamicLibrary::~DynamicLibrary() {
+    unload();
 }
 
-PluginManager::~PluginManager() {
-    for (void* h : impl->handles) {
-#ifdef _WIN32
-        FreeLibrary((HMODULE)h);
-#else
-        dlclose(h);
-#endif
+bool DynamicLibrary::load(const std::string& path) {
+    if (handle_) {
+        unload();
     }
-    delete impl;
+    
+#if defined(_WIN32)
+    handle_ = LoadLibraryA(path.c_str());
+    if (!handle_) {
+        DWORD error = GetLastError();
+        std::cerr << "Ошибка загрузки библиотеки " << path << ", ошибка: " << error << std::endl;
+        return false;
+    }
+#else
+    handle_ = dlopen(path.c_str(), RTLD_LAZY | RTLD_LOCAL);
+    if (!handle_) {
+        std::cerr << "Ошибка загрузки библиотеки " << path << ": " << dlerror() << std::endl;
+        return false;
+    }
+#endif
+    return true;
 }
 
-static bool isSharedLib(const std::filesystem::path& p) {
-#ifdef _WIN32
-    return p.extension() == ".dll";
-#elif __APPLE__
-    return p.extension() == ".dylib" || p.extension() == ".so";
+void DynamicLibrary::unload() {
+    if (handle_) {
+#if defined(_WIN32)
+        FreeLibrary(static_cast<HMODULE>(handle_));
 #else
-    return p.extension() == ".so";
+        dlclose(handle_);
+#endif
+        handle_ = nullptr;
+    }
+}
+
+void* DynamicLibrary::getSymbol(const std::string& name) {
+    if (!handle_) return nullptr;
+    
+#if defined(_WIN32)
+    return reinterpret_cast<void*>(
+        GetProcAddress(static_cast<HMODULE>(handle_), name.c_str())
+    );
+#else
+    return dlsym(handle_, name.c_str());
 #endif
 }
 
-void PluginManager::loadFromDirectory(const std::string& path) {
-    namespace fs = std::filesystem;
-    fs::path dir(path);
-    if (!fs::exists(dir) || !fs::is_directory(dir)) {
-        std::cerr << "Plugins dir not found: " << path << "\n";
+PluginManager::PluginManager(FunctionRegistry& registry): registry_(registry) {}
+
+void PluginManager::loadPlugins(const std::string& pluginsDir) {
+    if (!fs::exists(pluginsDir)) {
+        std::cerr << "Папка с плагинами отсутствует: " << pluginsDir << std::endl;
         return;
     }
-
-    for (const auto& entry : fs::directory_iterator(dir)) {
-        if (!entry.is_regular_file()) continue;
-        if (!isSharedLib(entry.path())) continue;
-
-        const auto filePath = entry.path().string();
-
-#ifdef _WIN32
-        HMODULE h = LoadLibraryA(filePath.c_str());
-        if (!h) {
-            std::cerr << "Failed to load plugin: " << filePath << "\n";
-            continue;
-        }
-        auto nameFn = (const char*(*)())GetProcAddress(h, "plugin_name");
-        auto funcFn = (double(*)(double))GetProcAddress(h, "plugin_func");
+    
+    if (!fs::is_directory(pluginsDir)) {
+        std::cerr << "Путь - не папка: " << pluginsDir << std::endl;
+        return;
+    }
+    
+    std::cout << "Загрузка плагинов с: " << pluginsDir << std::endl;
+    
+    try {
+        for (const auto& entry : fs::directory_iterator(pluginsDir)) {
+            if (entry.is_regular_file()) {
+                std::string ext = entry.path().extension().string();
+                
+#if defined(_WIN32)
+                bool isPlugin = (ext == ".dll");
+#elif defined(__APPLE__)
+                bool isPlugin = (ext == ".dylib");
 #else
-        void* h = dlopen(filePath.c_str(), RTLD_NOW);
-        if (!h) {
-            std::cerr << "Failed to load plugin: " << filePath << " - " << dlerror() << "\n";
-            continue;
-        }
-        auto nameFn = (const char*(*)())dlsym(h, "plugin_name");
-        auto funcFn = (double(*)(double))dlsym(h, "plugin_func");
+                bool isPlugin = (ext == ".so");
 #endif
+                
+                if (isPlugin) {
+                    loadSinglePlugin(entry.path().string());
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Ошибка чтения папки с плагинами: " << e.what() << std::endl;
+    }
+}
 
-        if (!nameFn || !funcFn) {
-            std::cerr << "Invalid plugin (missing symbols): " << filePath << "\n";
-#ifdef _WIN32
-            FreeLibrary((HMODULE)h);
-#else
-            dlclose(h);
-#endif
-            continue;
-        }
-
-        const char* nameC = nullptr;
-        try {
-            nameC = nameFn();
-        } catch (...) {
-            std::cerr << "plugin_name() threw in " << filePath << "\n";
-#ifdef _WIN32
-            FreeLibrary((HMODULE)h);
-#else
-            dlclose(h);
-#endif
-            continue;
-        }
-        if (!nameC) {
-            std::cerr << "plugin_name() returned null in " << filePath << "\n";
-#ifdef _WIN32
-            FreeLibrary((HMODULE)h);
-#else
-            dlclose(h);
-#endif
-            continue;
-        }
-
-        std::string fname = nameC;
-        std::function<double(double)> wrapper = [funcFn, filePath](double x)->double {
+void PluginManager::loadSinglePlugin(const std::string& filepath) {
+    auto lib = std::make_unique<DynamicLibrary>();
+    
+    if (!lib->load(filepath)) {
+        std::cerr << "Ошибка загрузки плагинов: " << filepath << std::endl;
+        return;
+    }
+    
+    using GetNameFunc = const char*(*)();
+    using ExecuteFunc = double(*)(double);
+    
+    auto getName = reinterpret_cast<GetNameFunc>(
+        lib->getSymbol("getFunctionName"));
+    auto execute = reinterpret_cast<ExecuteFunc>(
+        lib->getSymbol("calcFunction"));
+    
+    if (!getName || !execute) {
+        std::cerr << "Плагин " << filepath << " не экспортирует необходимые функции" << std::endl;
+        return;
+    }
+    
+    const char* functionName = nullptr;
+    try {
+        functionName = getName();
+    } catch (const std::exception& e) {
+        std::cerr << "Плагин getFunctionName() бросил исключение: " << e.what() << std::endl;
+        return;
+    } catch (...) {
+        std::cerr << "Плагин getFunctionName() бросил неизвестное исключение" << std::endl;
+        return;
+    }
+    
+    if (!functionName || functionName[0] == '\0') {
+        std::cerr << "Плагин не возвратил имя: " << filepath << std::endl;
+        return;
+    }
+    
+    std::string nameStr(functionName);
+    
+    if (registry_.hasFunction(nameStr)) {
+        std::cerr << "Функция '" << nameStr << "' уже зарегистрирован: " << filepath << std::endl;
+        return;
+    }
+    
+    std::function<double(double)> wrapper = [execute, nameStr](double x) -> double {
             try {
-                double r = funcFn(x);
-                return r;
-            } catch (const std::exception& ex) {
-                std::cerr << "Plugin function threw exception in " << filePath << ": " << ex.what() << "\n";
-                return std::numeric_limits<double>::quiet_NaN();
+                return execute(x);
+            } catch (const std::exception& e) {
+                throw std::runtime_error(
+                    std::string("Функция плагина '") + nameStr + "' ошибка: " + e.what());
             } catch (...) {
-                std::cerr << "Plugin function threw unknown exception in " << filePath << "\n";
-                return std::numeric_limits<double>::quiet_NaN();
+                throw std::runtime_error(
+                    std::string("Неизвестная ошибка в функции плагина '") +
+                    nameStr + "'");
             }
         };
-
-        registry.registerFunction(fname, wrapper);
-        std::cerr << "Loaded plugin: " << filePath << " as function '" << fname << "'\n";
-
-        impl->handles.push_back(h);
-    }
+    
+    registry_.registerFunction(nameStr, wrapper);
+    
+    loadedLibs_.push_back(std::move(lib));
+    
+    std::cout << "Загружен плагин: " << nameStr << " из " << fs::path(filepath).filename().string() << std::endl;
 }
