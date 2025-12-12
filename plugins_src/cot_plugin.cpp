@@ -1,18 +1,27 @@
 #include "plugin_interface.h"
 #include <cmath>
-#include <string>
-#define M_PI 3.14157
 
+#ifndef _WIN32
+    #define PLUGIN_API extern "C" __attribute__((visibility("default")))
+#endif
 
-extern "C" {
-
-const char* plugin_name() {
-    return "cot";
+namespace {
+    constexpr double PI = 3.14159265358979323846;
+    double degToRad(double degrees) {
+        return degrees * PI / 180.0;
+    }
 }
 
-double plugin_func(double x) {
-    double radians = x * M_PI / 180.0;
-    return std::cos(radians) / std::sin(radians);
+PLUGIN_API const char* getFunctionName() {
+    return "ctg";
 }
 
+PLUGIN_API double calcFunction(double x) {
+    if (std::isnan(x)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    if (std::isinf(x)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return std::cos(degToRad(x))/std::sin(degToRad(x));
 }
