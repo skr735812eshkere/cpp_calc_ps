@@ -8,15 +8,17 @@
 
 int main() {
     FunctionRegistry registry;
+    Parser parser;
 
     registry.registerFunction("abs", [](double x){ return std::abs(x); });
     registry.registerFunction("sqrt", [](double x){ if (x<0) return std::numeric_limits<double>::quiet_NaN(); return std::sqrt(x); });
     registry.registerFunction("ln", [](double x){ if (x<=0) return std::numeric_limits<double>::quiet_NaN(); return std::log(x); });
 
     PluginManager pm(registry);
-    pm.loadFromDirectory("./plugins");
+    pm.loadPlugins("./plugins");
+    parser.setAvailableFunctions(registry.getFunctionInfo());
 
-    std::cout << "Calc REPL. Enter expression or 'quit'.\n";
+    std::cout << "Введите выразжение или 'quit'\n";
     std::string line;
     while (true) {
         std::cout << "> ";
@@ -25,18 +27,18 @@ int main() {
         if (line == "quit" || line == "exit") break;
 
         try {
-            auto toks = tokenize(line);
-            auto rpn = toRPN(toks);
+            auto toks = parser.tokenize(line);
+            auto rpn = parser.toRPN(toks);
             auto res = evaluateRPN(rpn, registry);
             if (!res.ok) {
-                std::cout << "Error: " << res.err << "\n";
+                std::cout << "Ашипка: " << res.err << "\n";
             } else {
                 std::cout << res.value << "\n";
             }
         } catch (const std::exception& ex) {
-            std::cout << "Parse/Error: " << ex.what() << "\n";
+            std::cout << "Ошибка парсинга: " << ex.what() << "\n";
         } catch (...) {
-            std::cout << "Unknown error\n";
+            std::cout << "Неизвестная ошибка\n";
         }
     }
 

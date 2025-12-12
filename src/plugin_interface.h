@@ -1,10 +1,17 @@
-#pragma once
+#ifndef PLUGIN_INTERFACE_H
+#define PLUGIN_INTERFACE_H
+
 #ifdef _WIN32
-  #define PLUGIN_EXPORT extern "C" __declspec(dllexport)
+    #ifdef BUILDING_PLUGIN
+        #define PLUGIN_API extern "C" __declspec(dllexport)
+    #else
+        #define PLUGIN_API extern "C" __declspec(dllimport)
+    #endif
 #else
-  #define PLUGIN_EXPORT extern "C" __attribute__((visibility("default")))
+    #define PLUGIN_API extern "C" __attribute__((visibility("default")))
 #endif
 
-PLUGIN_EXPORT const char* plugin_name();
+PLUGIN_API const char* getFunctionName();
+PLUGIN_API double calcFunction(double x);
 
-PLUGIN_EXPORT double plugin_func(double x);
+#endif

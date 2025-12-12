@@ -1,17 +1,27 @@
 #include "plugin_interface.h"
 #include <cmath>
-#include <string>
-#define M_PI 3.14157
 
+#ifndef _WIN32
+    #define PLUGIN_API extern "C" __attribute__((visibility("default")))
+#endif
 
-extern "C" {
+namespace {
+    constexpr double PI = 3.14159265358979323846;
+    double degToRad(double degrees) {
+        return degrees * PI / 180.0;
+    }
+}
 
-const char* plugin_name() {
+PLUGIN_API const char* getFunctionName() {
     return "sin";
 }
 
-double plugin_func(double x) {
-    return std::sin(x * M_PI / 180.0);
-}
-
+PLUGIN_API double calcFunction(double x) {
+    if (std::isnan(x)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    if (std::isinf(x)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return std::sin(degToRad(x));
 }
