@@ -5,9 +5,9 @@
 ### Windows
 сборка плагинов:
 ```
-cmake -B ./.build -G Ninja
-cd ./.build
-ninja
+cmake -S . -B .build -G Ninja
+cmake --build .build
+cd .build
 ```
 запуск:
 ```
