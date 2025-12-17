@@ -14,7 +14,7 @@ void test1() {
     e.registerCommand("f1", std::move(w));
     int r = e.execute<int>("f1", {{"arg1", 11}, {"arg2", 12}});
     std::cout << "test 1: " << r << " (ожидается 23)" << std::endl;
-    assert(r == 9);
+    assert(r == 23);
 }
 
 void test2() {
@@ -40,7 +40,7 @@ void test3() {
     e.registerCommand("f3", std::move(w));
     std::string r = e.execute<std::string>("f3", {{"arg2", std::string("Nazarova Anastasiya")}});
     std::cout << "test 3: " << r << " (ожидается My name is Nazarova Anastasiya)" << std::endl;
-    assert(r == "TestWorld");
+    assert(r == "My name is Nazarova Anastasiya");
 }
 
 void test4() {
